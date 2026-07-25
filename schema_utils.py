@@ -360,7 +360,7 @@ def process_dataframe(table_name_param: str, df: pd.DataFrame):
                 
                 # Set the current column name for logging
                 df[col_name] = df[col_name].apply(conversion_fcn)
-                print(df[col_name])
+                # print(df[col_name]) # RainCity change to reduce logging noise
                 break
         # for index, item in enumerate(df[col_name]):
             # print(f"Row {index}: Value={item}, Type={type(item)}")
