@@ -33,10 +33,10 @@ from file_utils import FileType, read_from_file, write_to_file, delete_file
 
 def init_sync(collection_name: str):
     logger = logging.getLogger(f"{__name__}[{collection_name}]")
-    # ---------- RainCity changes ---------- 
-    version = "2026-07-24_2328"
-    logger.info(f"*********** App version: {version} *********** ")
-    # ---------- End of RainCity changes ----------
+    ## ---------- RainCity changes ---------- 
+    version = "2026-07-24_schema-aware-conversion"
+    logger.info(f"\n\n\n\n*********** App version: {version} ***********\n\n\n\n")
+    ## ---------- End of RainCity changes ----------
 
     # detect if there's a init_sync_stat file in LZ, and get its value
     init_sync_stat_flag = read_from_file(
@@ -179,14 +179,14 @@ def init_sync(collection_name: str):
         
         logger.info(f"writing parquet file: {parquet_full_path_filename}")
 
-        # Convert any remaining Object column into String
-        id_col = batch_df['_id']
-        obj_cols = batch_df.select_dtypes(include=['object']).columns
-        batch_df[obj_cols] = batch_df[obj_cols].astype(str,errors="ignore")
+        ## ---------- Start of RainCity changes ----------
+        # Use schema-aware conversion to preserve correct types and prevent SchemaMergeFailure
+        batch_df = schema_utils.convert_object_columns_by_schema(batch_df, collection_name)
         
-        #  Restore the _id column
-        batch_df['_id'] = id_col
-
+        # Convert _id to string
+        batch_df['_id'] = batch_df['_id'].apply(to_string)
+        ## ---------- End of RainCity changes ----------
+        
         # Write the parquet file
         batch_df.to_parquet(parquet_full_path_filename, index=False)
         # os.remove("temp.csv")
