@@ -346,7 +346,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
         col_schema = schema.get(col, {})
         if not col_schema:
             # No schema for this column - fallback to string conversion
-            logger.debug(f"No schema for column {col}, converting to string as fallback")
+            logger.warning(f"No schema for column {col}, converting to string as fallback")
             try:
                 df[col] = df[col].apply(
                     lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) 
@@ -365,7 +365,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                 df[col] = df[col].apply(
                     lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) else x
                 )
-                logger.debug(f"Converted column {col} (dict/list) to JSON strings")
+                logger.info(f"Converted column {col} (dict/list) to JSON strings")
                 
             elif expected_type == bool:
                 # Boolean columns - ensure they stay as nullable boolean type
@@ -373,7 +373,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('boolean')
-                logger.debug(f"Converted column {col} to boolean dtype")
+                logger.info(f"Converted column {col} to boolean dtype")
                 
             elif expected_type == int:
                 # Integer columns - ensure they stay as nullable Int64 type
@@ -381,7 +381,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('Int64')
-                logger.debug(f"Converted column {col} to Int64 dtype")
+                logger.info(f"Converted column {col} to Int64 dtype")
                 
             elif expected_type == float:
                 # Float columns - ensure proper float type
@@ -389,7 +389,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('float64')
-                logger.debug(f"Converted column {col} to float64 dtype")
+                logger.info(f"Converted column {col} to float64 dtype")
                 
             elif expected_type in (date, datetime, pd.Timestamp) or (expected_dtype and 'datetime' in str(expected_dtype)):
                 # Datetime columns - skip, already handled by process_dataframe
