@@ -362,34 +362,34 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
         try:
             if expected_type in (dict, list):
                 # Convert complex types to JSON strings
+                logger.warning(f"Converting column {col} from {df[col].dtype} (dict/list) to JSON strings")
                 df[col] = df[col].apply(
                     lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) else x
                 )
-                logger.warning(f"Converted column {col} from {df[col].dtype} (dict/list) to JSON strings")
                 
             elif expected_type == bool:
                 # Boolean columns - ensure they stay as nullable boolean type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to boolean dtype")
                 if expected_dtype and expected_dtype != 'object':
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('boolean')
-                logger.warning(f"Converted column {col} from {df[col].dtype} to boolean dtype")
                 
             elif expected_type == int:
                 # Integer columns - ensure they stay as nullable Int64 type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to Int64 dtype")
                 if expected_dtype and expected_dtype != 'object':
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('Int64')
-                logger.warning(f"Converted column {col} from {df[col].dtype} to Int64 dtype")
                 
             elif expected_type == float:
                 # Float columns - ensure proper float type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to float64 dtype")
                 if expected_dtype and expected_dtype != 'object':
                     df[col] = df[col].astype(expected_dtype)
                 else:
                     df[col] = df[col].astype('float64')
-                logger.warning(f"Converted column {col} to float64 dtype")
                 
             elif expected_type in (date, datetime, pd.Timestamp) or (expected_dtype and 'datetime' in str(expected_dtype)):
                 # Datetime columns - skip, already handled by process_dataframe
@@ -398,6 +398,7 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                 
             elif expected_type == str:
                 # String type - convert safely, preserving nulls
+                logger.debug(f"Converting column {col} from {df[col].dtype} to string")
                 def safe_str_convert(x):
                     if x is None or pd.isna(x):
                         return None  # Preserve nulls as None, not "None" string
@@ -407,7 +408,6 @@ def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> 
                         return str(x)
                 
                 df[col] = df[col].apply(safe_str_convert)
-                logger.debug(f"Converted column {col} to string")
                 
             else:
                 # Unknown type - fallback to string conversion
