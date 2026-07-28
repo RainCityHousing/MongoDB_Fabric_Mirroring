@@ -33,10 +33,6 @@ from file_utils import FileType, read_from_file, write_to_file, delete_file
 
 def init_sync(collection_name: str):
     logger = logging.getLogger(f"{__name__}[{collection_name}]")
-    ## ---------- RainCity changes ---------- 
-    version = "2026-07-24_schema-aware-conversion"
-    logger.info(f"\n\n\n\n*********** App version: {version} ***********\n\n\n\n")
-    ## ---------- End of RainCity changes ----------
 
     # detect if there's a init_sync_stat file in LZ, and get its value
     init_sync_stat_flag = read_from_file(
