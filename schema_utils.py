@@ -298,6 +298,147 @@ def init_table_schema(table_name: str):
         schemas.init_column_renaming(table_name, column_renaming_of_this_table)
 
 
+def convert_object_columns_by_schema(df: pd.DataFrame, collection_name: str) -> pd.DataFrame:
+    """
+    Convert object-dtype columns based on schema metadata to prevent SchemaMergeFailure errors.
+    
+    This function preserves the correct types for parquet write and Fabric ingestion:
+    - dict/list types: Convert to JSON strings
+    - bool types: Keep as pandas 'boolean' (nullable bool) - prevents string conversion
+    - int types: Keep as pandas 'Int64' (nullable int) - prevents string conversion
+    - float types: Keep as float64
+    - datetime types: Skip (handled by process_dataframe)
+    - string types: Convert safely while preserving nulls
+    - FALLBACK: If schema missing or conversion fails, convert to string (safe default)
+    
+    Args:
+        df: DataFrame to process
+        collection_name: Name of the collection (used to lookup schema)
+    
+    Returns:
+        Modified DataFrame with proper dtypes that match Fabric schema expectations
+    """
+    logger = logging.getLogger("convert_object_columns_by_schema")
+    
+    # Get object columns (excluding _id which is handled separately by caller)
+    obj_cols = df.select_dtypes(include=['object']).columns
+    
+    # Get schema to determine expected types
+    schema = schemas.get_table_schema(collection_name)
+    if not schema:
+        logger.warning(
+            f"No schema found for {collection_name}, falling back to string conversion for all object columns"
+        )
+        # Fallback: convert all object columns to strings (except _id)
+        for col in obj_cols:
+            if col != '_id':
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) 
+                    else (str(x) if x is not None and not pd.isna(x) else None)
+                )
+        return df
+    
+    for col in obj_cols:
+        if col == '_id':
+            continue  # Skip _id, it's handled separately by caller
+        
+        # Check schema to see what type this column should be
+        col_schema = schema.get(col, {})
+        if not col_schema:
+            # No schema for this column - fallback to string conversion
+            logger.warning(f"No schema for column {col}, converting to string as fallback")
+            try:
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) 
+                    else (str(x) if x is not None and not pd.isna(x) else None)
+                )
+            except Exception as e:
+                logger.error(f"Failed to convert column {col} to string: {e}", exc_info=True)
+            continue
+            
+        expected_type = col_schema.get(TYPE_KEY)
+        expected_dtype = col_schema.get(DTYPE_KEY)
+        
+        try:
+            if expected_type in (dict, list):
+                # Convert complex types to JSON strings
+                logger.warning(f"Converting column {col} from {df[col].dtype} (dict/list) to JSON strings")
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) else x
+                )
+                
+            elif expected_type == bool:
+                # Boolean columns - ensure they stay as nullable boolean type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to boolean dtype")
+                if expected_dtype and expected_dtype != 'object':
+                    df[col] = df[col].astype(expected_dtype)
+                else:
+                    df[col] = df[col].astype('boolean')
+                
+            elif expected_type == int:
+                # Integer columns - ensure they stay as nullable Int64 type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to Int64 dtype")
+                if expected_dtype and expected_dtype != 'object':
+                    df[col] = df[col].astype(expected_dtype)
+                else:
+                    df[col] = df[col].astype('Int64')
+                
+            elif expected_type == float:
+                # Float columns - ensure proper float type
+                logger.warning(f"Converting column {col} from {df[col].dtype} to float64 dtype")
+                if expected_dtype and expected_dtype != 'object':
+                    df[col] = df[col].astype(expected_dtype)
+                else:
+                    df[col] = df[col].astype('float64')
+                
+            elif expected_type in (date, datetime, pd.Timestamp) or (expected_dtype and 'datetime' in str(expected_dtype)):
+                # Datetime columns - skip, already handled by process_dataframe
+                logger.debug(f"Skipping datetime column {col}")
+                continue
+                
+            elif expected_type == str:
+                # String type - convert safely, preserving nulls
+                logger.debug(f"Converting column {col} from {df[col].dtype} to string")
+                def safe_str_convert(x):
+                    if x is None or pd.isna(x):
+                        return None  # Preserve nulls as None, not "None" string
+                    elif isinstance(x, (dict, list)):
+                        return json.dumps(x, default=str)
+                    else:
+                        return str(x)
+                
+                df[col] = df[col].apply(safe_str_convert)
+                
+            else:
+                # Unknown type - fallback to string conversion
+                logger.warning(
+                    f"Column {col} has unknown type {expected_type}, converting to string as fallback"
+                )
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) 
+                    else (str(x) if x is not None and not pd.isna(x) else None)
+                )
+                
+        except Exception as e:
+            logger.error(
+                f"Error converting column {col} for table {collection_name}: {e}. "
+                f"Expected type: {expected_type}, expected dtype: {expected_dtype}. "
+                f"Falling back to string conversion.",
+                exc_info=True
+            )
+            # Fallback: try to convert to string
+            try:
+                df[col] = df[col].apply(
+                    lambda x: json.dumps(x, default=str) if isinstance(x, (dict, list)) 
+                    else (str(x) if x is not None and not pd.isna(x) else None)
+                )
+                logger.info(f"Successfully converted column {col} to string as fallback")
+            except Exception as e2:
+                logger.error(f"Fallback string conversion also failed for column {col}: {e2}", exc_info=True)
+    
+    return df
+
+
 def process_dataframe(table_name_param: str, df: pd.DataFrame):
     global current_column_name, table_name, conversion_flag
     table_name = table_name_param
@@ -360,7 +501,7 @@ def process_dataframe(table_name_param: str, df: pd.DataFrame):
                 
                 # Set the current column name for logging
                 df[col_name] = df[col_name].apply(conversion_fcn)
-                print(df[col_name])
+                # print(df[col_name]) # RainCity change to reduce logging noise
                 break
         # for index, item in enumerate(df[col_name]):
             # print(f"Row {index}: Value={item}, Type={type(item)}")
@@ -425,7 +566,9 @@ def process_dataframe(table_name_param: str, df: pd.DataFrame):
                     + f"the dtype of the column {col_name} from {current_dtype} to {schema_of_this_column[DTYPE_KEY]}"
                 )  
     # Check if conversion log file exists before pushing
-    print("conversion_flag: ", conversion_flag)
+    ## ---------- Start of RainCity changes ----------
+    # print("conversion_flag: ", conversion_flag) # Comment this out to reduce logging noise
+    ## --------- End of RainCity changes ----------
     conversion_log_path = os.path.join(get_table_dir(table_name), CONVERSION_LOG_FILE_NAME)
     if os.path.exists(conversion_log_path) and conversion_flag:
         push_file_to_lz(conversion_log_path, table_name)

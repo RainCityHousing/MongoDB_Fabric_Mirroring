@@ -143,7 +143,7 @@ def listening(collection_name: str):
                         doc: dict = change["documentKey"]
                     else:
                         doc: dict = change["fullDocument"]
-
+                    logger.debug(f"Document extracted from change:\n\t{doc}") # RainCity Change for debugging
                     df = pd.DataFrame([doc])
 
                     # Always update resume_token on every processed change
@@ -170,8 +170,10 @@ def listening(collection_name: str):
                         accumulative_df = pd.concat(
                             [accumulative_df, df], ignore_index=True
                         )
-                        logger.info("concat accumulative_df result:")
-                        logger.info(accumulative_df)
+                        ## ---------- RainCity change ----------
+                        # logger.info("concat accumulative_df result:") # comment out to reduce logging noise
+                        # logger.info(accumulative_df)
+                        ## --------- End of RainCity change ----------
                     else:
                         logger.info("df created")
                         accumulative_df = df
@@ -289,13 +291,16 @@ def process_accumulative_df(accumulative_df, collection_name, init_sync_stat_fla
                 parquet_full_path_filename = get_parquet_full_path_filename(collection_name, last_parquet_file_num)
 
                 logger.info(f"writing parquet file: {parquet_full_path_filename}")
-                # Convert any remaining Object column into String
-                id_col = accumulative_df['_id']
-                obj_cols = accumulative_df.select_dtypes(include=['object']).columns
-                accumulative_df[obj_cols] = accumulative_df[obj_cols].astype(str,errors="ignore")
+                ## ---------- Start of RainCity changes ----------
                 
-                #  Restore the _id column
-                accumulative_df['_id'] = id_col
+                # Use schema-aware conversion to preserve correct types and prevent SchemaMergeFailure
+                accumulative_df = schema_utils.convert_object_columns_by_schema(accumulative_df, collection_name)
+                
+                # Convert _id to string
+                accumulative_df['_id'] = accumulative_df['_id'].apply(to_string)
+                
+                ## ---------- End of RainCity changes ----------
+                
                 # Write the parquet file
                 accumulative_df.to_parquet(parquet_full_path_filename)
                 accumulative_df = None

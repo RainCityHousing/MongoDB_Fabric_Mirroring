@@ -117,6 +117,11 @@ def mirror():
         init_table_schema(collection_name)
 
         Thread(target=listening, args=(collection_name,)).start()
+        ## ---------- RainCity changes ---------- 
+        version = "2026-07-27_2135"
+        logger.info(f"\n\n\n\n*********** App version: {version} ***********\n\n\n")
+        ## ---------- End of RainCity changes ----------
+        
         # listener_thread = Thread(target=listening, args=(collection_name,))
         # listener_thread.start()
         # threads.append(listener_thread)
