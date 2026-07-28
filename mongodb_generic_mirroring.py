@@ -118,7 +118,7 @@ def mirror():
 
         Thread(target=listening, args=(collection_name,)).start()
         ## ---------- RainCity changes ---------- 
-        version = "2026-07-27_2135"
+        version = "2026-07-28_1106"
         logger.info(f"\n\n\n\n*********** App version: {version} ***********\n\n\n")
         ## ---------- End of RainCity changes ----------
         
