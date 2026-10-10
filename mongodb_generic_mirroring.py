@@ -1,5 +1,6 @@
 import logging.handlers
 import os
+import time
 import logging
 from threading import Thread
 import pymongo
@@ -16,6 +17,12 @@ from constants import (
 )
 from push_file_to_lz import push_file_to_lz
 from file_utils import FileType, read_from_file
+from utils import run_with_retry
+
+# How often (in seconds) to re-scan MongoDB for newly created collections when
+# MONGO_COLLECTION=all. Can be overridden via the NEW_COLLECTION_SCAN_INTERVAL_SEC
+# environment variable.
+DEFAULT_NEW_COLLECTION_SCAN_INTERVAL_SEC = 600
 
 def mirror():
     load_dotenv()
@@ -82,11 +89,43 @@ def mirror():
         logger.warning(f"removed non-exists collection {non_exists_collection}")
 
     for collection_name in collection_list:
-    #>>># changes to write metadata.json a the first file - 6Mar2025
+        __start_mirroring_for_collection(collection_name, logger)
+
+    # When tracking "all" collections, periodically re-scan the database so
+    # collections created after this process started are picked up without
+    # requiring a restart (previously collection_list was computed once at
+    # startup and never revisited).
+    if mongodb_coll_name == "all":
+        Thread(
+            target=__rescan_for_new_collections,
+            args=(set(collection_list), logger),
+            daemon=True,
+        ).start()
+
+    # for thread in threads:
+    #     thread.join()
+    while True:
+        cmd = input()
+        if cmd.lower() == "quit":
+            os._exit(0)
+
+
+def __start_mirroring_for_collection(collection_name: str, logger: logging.Logger) -> bool:
+    """
+    Perform one-time setup for a collection (metadata/partner-events files,
+    schema init) and start its listening thread. Isolated in its own
+    try/except so a failure for one collection (e.g. a transient LZ/auth
+    error) only skips that collection instead of aborting the caller and
+    silently preventing other collections from ever starting.
+
+    Returns True if the collection's listening thread was started.
+    """
+    try:
+#>>># changes to write metadata.json a the first file - 6Mar2025
         metadata_file_exists = read_from_file(
             collection_name, METADATA_FILE_NAME, FileType.TEXT
         )
-        if not metadata_file_exists: 
+        if not metadata_file_exists:
             metadata_json_path = os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), METADATA_FILE_NAME
                 )
@@ -116,12 +155,19 @@ def mirror():
 
         init_table_schema(collection_name)
 
-        Thread(target=listening, args=(collection_name,)).start()
+        # listening() persists its progress (resume tokens) to file, so it
+        # is safe to transparently restart it with backoff if it ever
+        # crashes from an unexpected/unhandled exception.
+        Thread(
+            target=run_with_retry,
+            args=(listening,),
+            kwargs={"args": (collection_name,), "name": f"listening[{collection_name}]"},
+        ).start()
         ## ---------- RainCity changes ---------- 
         version = "2026-07-28_1106"
         logger.info(f"\n\n\n\n*********** App version: {version} ***********\n\n\n")
         ## ---------- End of RainCity changes ----------
-        
+
         # listener_thread = Thread(target=listening, args=(collection_name,))
         # listener_thread.start()
         # threads.append(listener_thread)
@@ -131,13 +177,37 @@ def mirror():
         # init_thread = Thread(target=init_sync, args=(collection_name,))
         # init_thread.start()
         # threads.append(init_thread)
+        return True
+    except Exception:
+        logger.error(
+            f"Failed to set up collection {collection_name}; skipping it for now.",
+            exc_info=True,
+        )
+        return False
 
-    # for thread in threads:
-    #     thread.join()
+
+def __rescan_for_new_collections(known_collections: set, logger: logging.Logger):
+    """
+    Periodically re-list the database's collections and start mirroring any
+    that weren't present (or weren't yet created) when this process started.
+    Only used when MONGO_COLLECTION=all.
+    """
+    scan_interval_sec = int(
+        os.getenv("NEW_COLLECTION_SCAN_INTERVAL_SEC", DEFAULT_NEW_COLLECTION_SCAN_INTERVAL_SEC)
+    )
     while True:
-        cmd = input()
-        if cmd.lower() == "quit":
-            os._exit(0)
+        time.sleep(scan_interval_sec)
+        try:
+            current_collections = __get_all_collections()
+        except Exception:
+            logger.error("Failed to re-scan collections; will retry next interval.", exc_info=True)
+            continue
+
+        new_collections = [c for c in current_collections if c not in known_collections]
+        for collection_name in new_collections:
+            logger.info(f"discovered new collection {collection_name}; starting mirroring for it")
+            if __start_mirroring_for_collection(collection_name, logger):
+                known_collections.add(collection_name)
 
 
 def __get_all_collections() -> list[str]:

@@ -1,9 +1,58 @@
 import os
+import time
+import logging
 from constants import DATA_FILES_PATH, FILE_NAME_LENGTH
 
 
 def to_string(obj) -> str:
     return str(obj)
+
+
+def run_with_retry(func, args=(), kwargs=None, name=None, initial_backoff_sec=5, max_backoff_sec=300):
+    """
+    Run func(*args, **kwargs) and, if it raises an unhandled exception, log it
+    and re-invoke func with exponential backoff (capped at max_backoff_sec)
+    instead of letting the thread silently die.
+
+    Intended for thread targets (e.g. listening, init_sync) that persist their
+    progress (resume tokens / last _id files) and can safely resume when
+    re-entered after a crash.
+    """
+    label = name or getattr(func, "__name__", str(func))
+    logger = logging.getLogger(f"supervisor[{label}]")
+    kwargs = kwargs or {}
+    backoff = initial_backoff_sec
+    attempt = 0
+    while True:
+        try:
+            func(*args, **kwargs)
+            # func returned normally (e.g. init_sync finished) - stop supervising
+            return
+        except Exception:
+            attempt += 1
+            logger.error(
+                "Unhandled exception in %s (attempt %d); restarting in %ds",
+                label, attempt, backoff, exc_info=True,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, max_backoff_sec)
+
+
+def log_thread_exceptions(func, args=(), kwargs=None, name=None):
+    """
+    Run func(*args, **kwargs), logging (with traceback) any unhandled
+    exception through the logging module before letting it propagate, so it
+    ends up in the configured log handlers (e.g. mirroring.log) instead of
+    only being printed to stderr by the default threading excepthook.
+    """
+    label = name or getattr(func, "__name__", str(func))
+    logger = logging.getLogger(f"thread[{label}]")
+    kwargs = kwargs or {}
+    try:
+        func(*args, **kwargs)
+    except Exception:
+        logger.error("Unhandled exception in %s", label, exc_info=True)
+        raise
 
 def get_table_dir(table_name: str) -> str:
     current_dir = os.path.dirname(os.path.abspath(__file__))

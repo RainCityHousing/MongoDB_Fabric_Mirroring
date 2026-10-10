@@ -24,7 +24,7 @@ from constants import (
     DTYPE_KEY,
     TYPE_KEY,
 )
-from utils import to_string, get_parquet_full_path_filename, get_temp_parquet_full_path_filename, get_table_dir
+from utils import to_string, get_parquet_full_path_filename, get_temp_parquet_full_path_filename, get_table_dir, run_with_retry
 from push_file_to_lz import push_file_to_lz
 #from flags import get_init_flag
 from init_sync import init_sync
@@ -70,7 +70,14 @@ def listening(collection_name: str):
     last_sync_time: float | None = None
 
     # start init sync after we get cursor from Change Stream
-    Thread(target=init_sync, args=(collection_name,)).start()
+    # init_sync persists its progress (last _id / init-sync-status files), so
+    # it is safe to transparently restart it with backoff if it ever crashes
+    # from an unexpected/unhandled exception.
+    Thread(
+        target=run_with_retry,
+        args=(init_sync,),
+        kwargs={"args": (collection_name,), "name": f"init_sync[{collection_name}]"},
+    ).start()
     logger.info(f"start listening to change stream for collection {collection_name}")
     
     # New main loop logic
@@ -245,6 +252,23 @@ def listening(collection_name: str):
 
             # Outer while True will rebuild watch_kwargs and reopen.
             # Slight backoff to avoid tight reconnect loop
+            time.sleep(2)
+            continue
+        except Exception as exc:
+            # Catch-all for unexpected errors raised while processing changes
+            # (e.g. schema conversion, parquet writing, or pushing files to the
+            # landing zone) that aren't pymongo errors. Without this, any such
+            # error would silently kill this collection's listening thread
+            # forever, so instead we log it and reopen the stream, keeping the
+            # last known resume_token so no changes are missed.
+            logger.error(
+                "Unexpected error while processing changes for collection %s: %s; "
+                "will reopen with last resume_token=%s",
+                collection_name,
+                exc,
+                resume_token,
+                exc_info=True,
+            )
             time.sleep(2)
             continue
 

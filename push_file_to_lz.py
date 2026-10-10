@@ -2,12 +2,45 @@ import os
 from dotenv import load_dotenv
 import requests
 import json
+import time
 import logging
 from datetime import datetime
 import utils
 import constants
 
 logger = logging.getLogger(__name__)
+
+
+def _request_with_retry(method: str, url: str, max_retries: int = 3, backoff_sec: float = 2, **kwargs):
+    """
+    Perform an HTTP request against the landing zone / OneLake endpoint,
+    validating the response status code and retrying transient failures
+    (429 throttling, 5xx server errors) with exponential backoff. Raises for
+    any non-retryable error status, or once retries are exhausted, so a
+    failed write is never silently treated as having succeeded.
+    """
+    attempt = 0
+    backoff = backoff_sec
+    while True:
+        attempt += 1
+        response = requests.request(method, url, **kwargs)
+        if response.ok:
+            return response
+
+        retryable = response.status_code == 429 or response.status_code >= 500
+        if retryable and attempt <= max_retries:
+            logger.warning(
+                "Retryable error (status %d) calling %s %s (attempt %d/%d); retrying in %.1fs",
+                response.status_code, method, url, attempt, max_retries, backoff,
+            )
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
+
+        raise Exception(
+            f"Landing zone request failed: {method} {url} returned "
+            f"status {response.status_code}: {response.text[:500]}"
+        )
 
 
 def push_file_to_lz(
@@ -102,7 +135,7 @@ def __patch_file(access_token, file_path, lz_url, table_name):
         logger.debug("creating file in lake")
 
         # Code to create file in lakehouse
-        response = requests.put(token_url_temp, data={}, headers=token_headers)
+        response = _request_with_retry("PUT", token_url_temp, data={}, headers=token_headers)
         logger.debug(response)
 
         token_url_temp = base_url + file_name_temp + '_TEMP' + "?position=0&action=append&flush=true"
@@ -117,7 +150,7 @@ def __patch_file(access_token, file_path, lz_url, table_name):
         # Code to push Data to Lakehouse
         with open(file_path, "rb") as file:
             file_contents = file.read()
-            response = requests.patch(token_url_temp, data=file_contents, headers=token_headers)
+            response = _request_with_retry("PATCH", token_url_temp, data=file_contents, headers=token_headers)
         logger.debug(response)
 
         # Rename file from temp to actual name
@@ -126,7 +159,7 @@ def __patch_file(access_token, file_path, lz_url, table_name):
             "x-ms-rename-source": base_url + file_name_temp + '_TEMP' + "?resource=file",
             "x-ms-version": "2020-06-12"
         }
-        response = requests.put(token_url, headers=token_headers)
+        response = _request_with_retry("PUT", token_url, headers=token_headers)
         logger.debug(response)
     except Exception as e:
         logger.error(f"Error patching file to landing zone: {str(e)}")
